@@ -10,6 +10,13 @@ import requests
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"}
 COLS = ["Number", "Name", "Market", "Watch"]
+# Public Google Sheet used as the stock list when data/AllStock.xlsx is not in the repo.
+SHEET_CSV = ("https://docs.google.com/spreadsheets/d/"
+             "10R9CXiiJDvEXL3j7ZAlbZdLZ2mDydv3HrPRNCaVbGIM/export?format=csv")
+# Watchlist used when the list has no Watch column (the raw Google Sheet).
+DEFAULT_WATCH = {"0050", "0056", "006208", "00878", "1216", "1301", "2303", "2308", "2317", "2330",
+                 "2382", "2412", "2454", "2603", "2881", "2882", "2886", "2891", "3008", "3711",
+                 "3293", "5483", "6488", "8069"}
 
 
 # ---------- stock list ----------
@@ -34,14 +41,23 @@ def _norm_number(v) -> str:
 
 
 def load_stock_list(src) -> pd.DataFrame:
-    """Read the stock list from a path or file-like object.
+    """Read the stock list from an Excel path or file-like object, or a CSV URL.
 
     Accepts the clean format (columns Number, Name, optional Market, Watch) or the
     raw Google-Sheets export, where a block after a run of blank rows is OTC.
+    If `src` is a path that does not exist, the Google Sheet (SHEET_CSV) is read instead.
     """
-    import openpyxl
-    ws = openpyxl.load_workbook(src, read_only=True).worksheets[0]
-    rows = [[_cell(c) for c in r[:8]] for r in ws.iter_rows(values_only=True)]
+    if isinstance(src, (str, Path)) and not str(src).startswith("http") and not Path(src).exists():
+        src = SHEET_CSV
+    if isinstance(src, str) and src.startswith("http"):
+        import csv
+        r = requests.get(src, headers=UA, timeout=20)
+        r.raise_for_status()
+        rows = [(row + [None] * 8)[:8] for row in csv.reader(io.StringIO(r.content.decode("utf-8-sig")))]
+    else:
+        import openpyxl
+        ws = openpyxl.load_workbook(src, read_only=True).worksheets[0]
+        rows = [[_cell(c) for c in r[:8]] for r in ws.iter_rows(values_only=True)]
     hdr = next((i for i, r in enumerate(rows) if r and str(r[0]).strip() == "Number"), None)
     if hdr is None:
         raise ValueError("No 'Number' header found in column A.")
@@ -62,7 +78,7 @@ def load_stock_list(src) -> pd.DataFrame:
             continue
         seen.add(num)
         mkt = str(r[i_mkt]).strip().upper() if i_mkt is not None and r[i_mkt] else ("OTC" if otc else "TSE")
-        watch = str(r[i_watch]).strip().upper() in ("Y", "YES", "TRUE", "1") if i_watch is not None else False
+        watch = str(r[i_watch]).strip().upper() in ("Y", "YES", "TRUE", "1") if i_watch is not None else num in DEFAULT_WATCH
         out.append([num, str(r[1] or "").strip(), "OTC" if mkt.startswith("O") else "TSE", watch])
     return pd.DataFrame(out, columns=COLS)
 
